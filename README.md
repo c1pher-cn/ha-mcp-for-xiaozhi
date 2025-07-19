@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/c1pher-cn-ha-mcp-for-xiaozhi-badge.png)](https://mseep.ai/app/c1pher-cn-ha-mcp-for-xiaozhi)
+
 
 ## ha-mcp-for-xiaozhi
 
