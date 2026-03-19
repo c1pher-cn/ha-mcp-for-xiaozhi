@@ -5,6 +5,7 @@
 ![GitHub release (latest by date)](https://img.shields.io/github/v/release/c1pher-cn/ha-mcp-for-xiaozhi?style=for-the-badge&color=green)
 ![GitHub release (latest by date)](https://img.shields.io/github/downloads/c1pher-cn/ha-mcp-for-xiaozhi/total?style=for-the-badge&color=green)
 ![GitHub release (latest by date)](https://img.shields.io/github/downloads/c1pher-cn/ha-mcp-for-xiaozhi/latest/total?style=for-the-badge&color=green)
+[![MCPAmpel](https://img.shields.io/endpoint?url=https://mcpampel.com/badge/c1pher-cn/ha-mcp-for-xiaozhi.json&style=for-the-badge)](https://mcpampel.com/repo/c1pher-cn/ha-mcp-for-xiaozhi)
 
 - [English](README.en.md)
 - [中文](README.md)
