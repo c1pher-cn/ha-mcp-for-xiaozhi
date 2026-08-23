@@ -8,7 +8,7 @@
   "integration_type": "service",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/c1pher-cn/ha-mcp-for-xiaozhi/issues",
-  "requirements": ["mcp==1.14.1"],
-  "version": "0.0.8"
+  "requirements": ["mcp>=1.14.1"],
+  "version": "0.0.9"
 }
 
