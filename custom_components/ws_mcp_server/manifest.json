@@ -3,12 +3,12 @@
   "name": "MCP Server for Xiaozhi",
   "codeowners": ["@c1pher-cn"],
   "config_flow": true,
-  "dependencies": ["homeassistant", "http", "conversation","voluptuous"],
+  "dependencies": ["homeassistant", "http", "conversation"],
   "documentation": "https://github.com/c1pher-cn/ha-mcp-for-xiaozhi",
   "integration_type": "service",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/c1pher-cn/ha-mcp-for-xiaozhi/issues",
-  "requirements": ["mcp>=1.14.1"],
+  "requirements": ["mcp>=1.14.1","voluptuous-openapi"],
   "version": "0.1.2"
 }
 
