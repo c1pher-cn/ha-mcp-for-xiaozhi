@@ -1,170 +1,132 @@
-"""The Model Context Protocol Server implementation.
-
-The Model Context Protocol python sdk defines a Server API that provides the
-MCP message handling logic and error handling. The server implementation provided
-here is independent of the lower level transport protocol.
-
-See https://modelcontextprotocol.io/docs/concepts/architecture#implementation-example
-"""
-
-from collections.abc import Callable, Sequence
-import json
 import logging
-from typing import Any, cast
-
+import anyio
+import asyncio
+import aiohttp
+from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from mcp import types
-from mcp.server import Server
-from mcp.server.lowlevel.helper_types import ReadResourceContents
-from probatio import to_openapi
-from pydantic import AnyUrl
-import voluptuous as vol
+from mcp.shared.message import SessionMessage
 
-from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.components import conversation
+from homeassistant.const import CONF_LLM_HASS_API
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import llm
 
-from .const import STATELESS_LLM_API
+from .const import DOMAIN
+from .server import create_server
+from .session import Session
+from .types import WsMCPServerConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 
-SNAPSHOT_RESOURCE_URI = "homeassistant://assist/context-snapshot"
-SNAPSHOT_RESOURCE_URL = AnyUrl(SNAPSHOT_RESOURCE_URI)
-SNAPSHOT_RESOURCE_MIME_TYPE = "text/plain"
-LIVE_CONTEXT_TOOL_NAME = "homeassistant__GetLiveContext"
 
+async def async_setup_entry(hass: HomeAssistant,  entry: WsMCPServerConfigEntry) -> bool:
+    """Set up MCP Server from a config entry."""
+    hass.async_create_task(_connect_loop(hass, entry))
+    #hass.async_create_task(_connect_to_client(hass, entry))
+    return True
 
-def _has_live_context_tool(llm_api: llm.APIInstance) -> bool:
-    """Return if the selected API exposes the live context tool."""
-    return any(tool.name == LIVE_CONTEXT_TOOL_NAME for tool in llm_api.tools)
-
-
-def _format_tool(
-    tool: llm.Tool, custom_serializer: Callable[[Any], Any] | None
-) -> types.Tool:
-    """Format tool specification."""
-    input_schema = to_openapi(tool.parameters, custom_serializer=custom_serializer)
-    return types.Tool(
-        name=tool.name,
-        description=tool.description or "",
-        inputSchema={
-            "type": "object",
-            "properties": input_schema["properties"],
-        },
+def async_get_config_entry(hass: HomeAssistant) -> WsMCPServerConfigEntry:
+    """Get the first enabled MCP server config entry."""
+    config_entries: list[WsMCPServerConfigEntry] = (
+        hass.config_entries.async_loaded_entries(DOMAIN)
     )
+    if not config_entries:
+        raise RuntimeError("Model Context Protocol server is not configured")
+    if len(config_entries) > 1:
+        raise RuntimeError("Found multiple Model Context Protocol configurations")
+    return config_entries[0]
 
 
-async def create_server(
-    hass: HomeAssistant, llm_api_id: str | list[str], llm_context: llm.LLMContext
-) -> Server:
-    """Create a new Model Context Protocol Server.
-
-    A Model Context Protocol Server object is associated with a single session.
-    The MCP SDK handles the details of the protocol.
-    """
-    if llm_api_id == STATELESS_LLM_API:
-        llm_api_id = llm.LLM_API_ASSIST
-
-    server = Server[Any]("home-assistant")
-
-    async def get_api_instance() -> llm.APIInstance:
-        """Get the LLM API selected."""
-        # Backwards compatibility with old MCP Server config
-        return await llm.async_get_api(hass, llm_api_id, llm_context)
-
-    @server.list_prompts()  # type: ignore[no-untyped-call,untyped-decorator]
-    async def handle_list_prompts() -> list[types.Prompt]:
-        llm_api = await get_api_instance()
-        return [
-            types.Prompt(
-                name=llm_api.api.name,
-                description=f"Default prompt for Home Assistant {llm_api.api.name} API",
-            )
-        ]
-
-    @server.get_prompt()  # type: ignore[no-untyped-call,untyped-decorator]
-    async def handle_get_prompt(
-        name: str, arguments: dict[str, str] | None
-    ) -> types.GetPromptResult:
-        llm_api = await get_api_instance()
-        if name != llm_api.api.name:
-            raise ValueError(f"Unknown prompt: {name}")
-
-        return types.GetPromptResult(
-            description=f"Default prompt for Home Assistant {llm_api.api.name} API",
-            messages=[
-                types.PromptMessage(
-                    role="assistant",
-                    content=types.TextContent(
-                        type="text",
-                        text=llm_api.api_prompt,
-                    ),
-                )
-            ],
-        )
-
-    @server.list_resources()  # type: ignore[no-untyped-call,untyped-decorator]
-    async def handle_list_resources() -> list[types.Resource]:
-        llm_api = await get_api_instance()
-        if not _has_live_context_tool(llm_api):
-            return []
-
-        return [
-            types.Resource(
-                uri=SNAPSHOT_RESOURCE_URL,
-                name="assist_context_snapshot",
-                title="Assist context snapshot",
-                description=(
-                    "A snapshot of the current Assist context, matching the"
-                    " existing homeassistant__GetLiveContext tool output."
-                ),
-                mimeType=SNAPSHOT_RESOURCE_MIME_TYPE,
-            )
-        ]
-
-    @server.read_resource()  # type: ignore[no-untyped-call,untyped-decorator]
-    async def handle_read_resource(uri: AnyUrl) -> Sequence[ReadResourceContents]:
-        if str(uri) != SNAPSHOT_RESOURCE_URI:
-            raise ValueError(f"Unknown resource: {uri}")
-
-        llm_api = await get_api_instance()
-        if not _has_live_context_tool(llm_api):
-            raise ValueError(f"Unknown resource: {uri}")
-
-        tool_response = await llm_api.async_call_tool(
-            llm.ToolInput(tool_name=LIVE_CONTEXT_TOOL_NAME, tool_args={})
-        )
-        if not tool_response.get("success"):
-            raise HomeAssistantError(cast(str, tool_response["error"]))
-
-        return [
-            ReadResourceContents(
-                content=cast(str, tool_response["result"]),
-                mime_type=SNAPSHOT_RESOURCE_MIME_TYPE,
-            )
-        ]
-
-    @server.list_tools()  # type: ignore[no-untyped-call,untyped-decorator]
-    async def list_tools() -> list[types.Tool]:
-        """List available time tools."""
-        llm_api = await get_api_instance()
-        return [_format_tool(tool, llm_api.custom_serializer) for tool in llm_api.tools]
-
-    @server.call_tool()  # type: ignore[untyped-decorator]
-    async def call_tool(name: str, arguments: dict) -> Sequence[types.TextContent]:
-        """Handle calling tools."""
-        llm_api = await get_api_instance()
-        tool_input = llm.ToolInput(tool_name=name, tool_args=arguments)
-        _LOGGER.debug("Tool call: %s(%s)", tool_input.tool_name, tool_input.tool_args)
-
+async def _connect_loop(hass: HomeAssistant, entry: WsMCPServerConfigEntry) -> None:
+    """Reconnect on failure loop."""
+    while True:
         try:
-            tool_response = await llm_api.async_call_tool(tool_input)
-        except (HomeAssistantError, vol.Invalid) as e:
-            raise HomeAssistantError(f"Error calling tool: {e}") from e
-        return [
-            types.TextContent(
-                type="text",
-                text=json.dumps(tool_response, ensure_ascii=False),
-            )
-        ]
+            _LOGGER.info("mcp websocket.py loop")
+            if await _connect_to_client(hass, entry) == False:
+                break
+        except Exception as e:
+            _LOGGER.warning("mcp WebSocket disconnected or failed: %s", e)
+        _LOGGER.info("mcp websocket.py retry after 20 seconds")
+        await asyncio.sleep(20)  # 20秒后重连
 
-    return server
+async def _connect_to_client(hass: HomeAssistant, entry: WsMCPServerConfigEntry) -> None:
+    """Connect to external WebSocket endpoint as MCP server."""
+    #entry = async_get_config_entry(hass)
+    session_manager = entry.runtime_data
+    endpoint = entry.data.get("client_endpoint")
+    if not endpoint:
+        _LOGGER.error("No client endpoint configured in config entry")
+        return False
+
+    _LOGGER.info("mcp websocket.py _connect_to_client")
+    context = llm.LLMContext(
+        platform=DOMAIN,
+        context={},  # Could be extended
+        language="*",
+        assistant=conversation.DOMAIN,
+        device_id=None,
+    )
+    llm_api_id = entry.data[CONF_LLM_HASS_API]
+    _LOGGER.info("mcp llm_api_id: %s", llm_api_id)
+    server = await create_server(hass, llm_api_id, context)
+    options = await hass.async_add_executor_job(server.create_initialization_options)
+
+    read_stream_writer, read_stream = anyio.create_memory_object_stream(0)
+    write_stream, write_stream_reader = anyio.create_memory_object_stream(0)
+    
+    bReConnect = True
+    async with session_manager.create(Session(read_stream_writer)) as session_id:
+        _LOGGER.info("mcp Connecting to MCP client at: %s", endpoint)
+        timeout = aiohttp.ClientTimeout(total=60)
+        async with aiohttp.ClientSession(timeout=timeout) as client_session:
+            try:
+                async with client_session.ws_connect(endpoint) as ws:
+                    async def ws_reader():
+                        async for msg in ws:
+                            if msg.type == aiohttp.WSMsgType.TEXT:
+                                try:
+                                    json_data = msg.json()
+                                    message = types.JSONRPCMessage.model_validate(json_data)
+                                    #_LOGGER.info("mcp reader: %s", message)
+                                    #await read_stream_writer.send(message)
+                                    session_message = SessionMessage(message)
+                                    _LOGGER.info("mcp reader: %s", session_message)
+                                    await read_stream_writer.send(session_message)
+                                except Exception as err:
+                                    _LOGGER.error("mcp Invalid message from client: %s", err)
+                            elif msg.type == aiohttp.WSMsgType.CLOSE:
+                                _LOGGER.error("mcp WebSocket closed: %s", msg.extra)
+                            elif msg.type == aiohttp.WSMsgType.ERROR:
+                                _LOGGER.error("mcp WebSocket error: %s", msg.data)
+                        _LOGGER.info("websocket was closed")
+                        tg.cancel_scope.cancel()  #立即取消任务组,避免50秒的心跳等待
+                    async def ws_writer():
+                        #async for message in write_stream_reader:
+                        #    _LOGGER.info("mcp writer: %s", message)
+                        #    await ws.send_str(message.model_dump_json(by_alias=True, exclude_none=True))
+                        async for session_message in write_stream_reader:
+                            _LOGGER.info("mcp writer: %s", session_message)
+                            # 从 SessionMessage 中提取实际的 JSONRPCMessage
+                            actual_message = session_message.message
+                            await ws.send_str(actual_message.model_dump_json(by_alias=True, exclude_none=True))
+                        _LOGGER.info("disconnect websocket")
+                        nonlocal bReConnect
+                        bReConnect = False
+                        await ws.close()  #断开旧websocket连接
+                    async def heartbeat():
+                        while True:
+                            try:
+                                await asyncio.sleep(50)
+                                _LOGGER.info("mcp heartbeat")
+                                await ws.ping()
+                            except Exception as e:
+                                _LOGGER.info("mcp heartbeat ping failed: %s", e)
+                                break  # 主动退出 heartbeat，让整个连接关闭并重连
+                    async with anyio.create_task_group() as tg:
+                        tg.start_soon(ws_reader)
+                        tg.start_soon(ws_writer)
+                        tg.start_soon(heartbeat)
+                        await server.run(read_stream, write_stream, options)
+            except Exception as e:
+                _LOGGER.exception("mcp Failed to connect to client WebSocket at %s: %s", endpoint, e)
+    return bReConnect
