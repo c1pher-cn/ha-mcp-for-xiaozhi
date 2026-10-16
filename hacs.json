@@ -4,5 +4,5 @@
     "render_readme": true,
     "zip_release": true,
     "filename": "ha-mcp-for-xiaozhi.zip",
-    "homeassistant": "2025.7.0"
+    "homeassistant": "2026.10.0"
 }
