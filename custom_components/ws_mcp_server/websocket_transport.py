@@ -18,12 +18,29 @@ from .types import WsMCPServerConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
 
+CONNECT_TASK_KEY = "connect_task"
+
 
 async def async_setup_entry(hass: HomeAssistant,  entry: WsMCPServerConfigEntry) -> bool:
     """Set up MCP Server from a config entry."""
-    hass.async_create_task(_connect_loop(hass, entry))
-    #hass.async_create_task(_connect_to_client(hass, entry))
+    task = hass.async_create_task(_connect_loop(hass, entry), name=f"{DOMAIN}_connect_{entry.entry_id}")
+    hass.data.setdefault(DOMAIN, {}).setdefault(entry.entry_id, {})[CONNECT_TASK_KEY] = task
     return True
+
+
+async def async_stop_entry(hass: HomeAssistant, entry: WsMCPServerConfigEntry) -> None:
+    """Cancel the reconnect loop started for this entry."""
+    entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if not entry_data:
+        return
+    task = entry_data.pop(CONNECT_TASK_KEY, None)
+    if task is not None and not task.done():
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
 
 def async_get_config_entry(hass: HomeAssistant) -> WsMCPServerConfigEntry:
     """Get the first enabled MCP server config entry."""
@@ -44,6 +61,8 @@ async def _connect_loop(hass: HomeAssistant, entry: WsMCPServerConfigEntry) -> N
             _LOGGER.info("mcp websocket.py loop")
             if await _connect_to_client(hass, entry) == False:
                 break
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             _LOGGER.warning("mcp WebSocket disconnected or failed: %s", e)
         _LOGGER.info("mcp websocket.py retry after 20 seconds")
@@ -52,7 +71,10 @@ async def _connect_loop(hass: HomeAssistant, entry: WsMCPServerConfigEntry) -> N
 async def _connect_to_client(hass: HomeAssistant, entry: WsMCPServerConfigEntry) -> None:
     """Connect to external WebSocket endpoint as MCP server."""
     #entry = async_get_config_entry(hass)
-    session_manager = entry.runtime_data
+    session_manager = getattr(entry, "runtime_data", None)
+    if session_manager is None:
+        _LOGGER.error("No runtime_data on config entry; stopping reconnect loop")
+        return False
     endpoint = entry.data.get("client_endpoint")
     if not endpoint:
         _LOGGER.error("No client endpoint configured in config entry")

@@ -7,7 +7,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 import logging
-from .websocket_transport import _connect_to_client
 from . import websocket_transport
 from .const import DOMAIN
 from .session import SessionManager
@@ -52,12 +51,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: WsMCPServerConfigEntry) 
         except ConnectionError as ex:
             hass.states.async_set(f"{DOMAIN}.{entry.entry_id}_status", "error")
             _LOGGER.error("MCP connect failed due to connection error: %s", ex)
+            await websocket_transport.async_stop_entry(hass, entry)
             # 清理已添加的 session_manager
             if DOMAIN in hass.data and entry.entry_id in hass.data[DOMAIN]:
                 hass.data[DOMAIN].pop(entry.entry_id)
         except Exception as ex:
             hass.states.async_set(f"{DOMAIN}.{entry.entry_id}_status", "error")
             _LOGGER.error("MCP connect failed: %s", ex)
+            await websocket_transport.async_stop_entry(hass, entry)
             if DOMAIN in hass.data and entry.entry_id in hass.data[DOMAIN]:
                 hass.data[DOMAIN].pop(entry.entry_id)
     if hass.is_running:
@@ -70,10 +71,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: WsMCPServerConfigEntry) 
 
 async def async_unload_entry(hass: HomeAssistant, entry: WsMCPServerConfigEntry) -> bool:
     """Unload a config entry."""
+    await websocket_transport.async_stop_entry(hass, entry)
     # 清理资源
     if DOMAIN in hass.data and entry.entry_id in hass.data[DOMAIN]:
-        session_manager = hass.data[DOMAIN][entry.entry_id]["session_manager"]
-        session_manager.close()
-        hass.data[DOMAIN].pop(entry.entry_id)
-    
+        entry_data = hass.data[DOMAIN][entry.entry_id]
+        session_manager = entry_data.get("session_manager")
+        if session_manager is not None:
+            session_manager.close()
+        hass.data[DOMAIN].pop(entry.entry_id, None)
+
     return True
