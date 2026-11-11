@@ -5,6 +5,7 @@ import aiohttp
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from mcp import types
 from mcp.shared.message import SessionMessage
+import pydantic
 
 from homeassistant.components import conversation
 from homeassistant.const import CONF_LLM_HASS_API
@@ -17,6 +18,12 @@ from .session import Session
 from .types import WsMCPServerConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
+
+# MCP SDK v2: types.JSONRPCMessage is a plain Union (no longer a pydantic RootModel), so it has no
+# model_validate(). Validate through a TypeAdapter, as Home Assistant core's mcp_server does.
+JSONRPC_MESSAGE_ADAPTER: pydantic.TypeAdapter[types.JSONRPCMessage] = pydantic.TypeAdapter(
+    types.JSONRPCMessage
+)
 
 CONNECT_TASK_KEY = "connect_task"
 
@@ -108,7 +115,7 @@ async def _connect_to_client(hass: HomeAssistant, entry: WsMCPServerConfigEntry)
                             if msg.type == aiohttp.WSMsgType.TEXT:
                                 try:
                                     json_data = msg.json()
-                                    message = types.JSONRPCMessage.model_validate(json_data)
+                                    message = JSONRPC_MESSAGE_ADAPTER.validate_python(json_data)
                                     #_LOGGER.info("mcp reader: %s", message)
                                     #await read_stream_writer.send(message)
                                     session_message = SessionMessage(message)
