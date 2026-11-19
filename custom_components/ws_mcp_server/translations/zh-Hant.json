@@ -1,0 +1,25 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "設定小智 MCP 存取點",
+        "description": "請輸入小智 AI 的 WebSocket 存取點位址",
+        "data": {
+          "client_endpoint": "WebSocket 存取點",
+          "name": "名稱",
+          "llm_hass_api": "[%key:common::config_flow::data::llm_hass_api%]"
+        },
+        "data_description": {
+          "llm_hass_api": "透過 Model Context Protocol 開放給外部控制 Home Assistant 的方式。"
+        }
+      }
+    },
+    "error": {
+      "llm_api_required": "至少須選擇一組 API",
+      "single_instance_allowed": "僅能設定一個實例"
+    },
+    "abort": {
+      "single_instance_allowed": "僅能設定一個實例"
+    }
+  }
+}
