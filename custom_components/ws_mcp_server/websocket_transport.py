@@ -9,7 +9,7 @@ import pydantic
 
 from homeassistant.components import conversation
 from homeassistant.const import CONF_LLM_HASS_API
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import Context, HomeAssistant, callback
 from homeassistant.helpers import llm
 
 from .const import DOMAIN
@@ -75,6 +75,23 @@ async def _connect_loop(hass: HomeAssistant, entry: WsMCPServerConfigEntry) -> N
         _LOGGER.info("mcp websocket.py retry after 20 seconds")
         await asyncio.sleep(20)  # 20秒后重连
 
+async def _async_create_llm_context(hass: HomeAssistant) -> llm.LLMContext:
+    """Build the LLM context for the external client.
+
+    APIs such as `homeassistant` require an admin user, and Home Assistant
+    reads `context.user_id` when checking it, so pass a real Context for the
+    owner (same as the built-in mcp_server diagnostics) instead of a dict.
+    """
+    owner = await hass.auth.async_get_owner()
+    return llm.LLMContext(
+        platform=DOMAIN,
+        context=Context(user_id=owner.id) if owner else None,
+        language="*",
+        assistant=conversation.DOMAIN,
+        device_id=None,
+    )
+
+
 async def _connect_to_client(hass: HomeAssistant, entry: WsMCPServerConfigEntry) -> None:
     """Connect to external WebSocket endpoint as MCP server."""
     #entry = async_get_config_entry(hass)
@@ -88,13 +105,7 @@ async def _connect_to_client(hass: HomeAssistant, entry: WsMCPServerConfigEntry)
         return False
 
     _LOGGER.info("mcp websocket.py _connect_to_client")
-    context = llm.LLMContext(
-        platform=DOMAIN,
-        context={},  # Could be extended
-        language="*",
-        assistant=conversation.DOMAIN,
-        device_id=None,
-    )
+    context = await _async_create_llm_context(hass)
     llm_api_id = entry.data[CONF_LLM_HASS_API]
     _LOGGER.info("mcp llm_api_id: %s", llm_api_id)
     server = await create_server(hass, llm_api_id, context, read_only=False)
